@@ -1,0 +1,20 @@
+# Mac System Files
+.DS_Store
+
+# Python Junk
+__pycache__/
+*.pyc
+.env
+venv/
+env/
+
+# VS Code Settings
+.vscode/
+
+# Local Testing Files
+*.log
+tmp/
+
+# Frontend local stuff
+node_modules/
+.DS_Store

@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Cloud Image Analyzer</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f7f6; display: flex; flex-direction: column; align-items: center; padding: 40px; margin: 0; }
+        .card { background: white; padding: 2.5rem; border-radius: 20px; box-shadow: 0 15px 35px rgba(0,0,0,0.1); width: 100%; max-width: 550px; text-align: center; }
+        h2 { color: #333; margin-bottom: 20px; }
+        #preview { width: 100%; border-radius: 12px; margin: 20px 0; display: none; border: 2px solid #eaeeef; }
+        
+        .results-box { background: #1e2227; color: #61dafb; padding: 20px; border-radius: 12px; text-align: left; margin-top: 25px; font-family: 'Courier New', Courier, monospace; min-height: 120px; transition: all 0.3s ease; }
+        .stat-line { margin: 8px 0; border-bottom: 1px solid #3e4451; padding-bottom: 8px; font-size: 14px; }
+        #status { font-weight: bold; color: #abb2bf; margin-bottom: 15px; display: block; }
+        
+        button { background: #007bff; color: white; border: none; padding: 14px 28px; border-radius: 8px; cursor: pointer; font-weight: 600; width: 100%; font-size: 16px; transition: background 0.2s; }
+        button:hover:not(:disabled) { background: #0056b3; }
+        button:disabled { background: #cbd5e0; cursor: not-allowed; }
+        
+        input[type="file"] { margin: 15px 0; color: #555; }
+        .disclaimer { margin-top: 15px; font-size: 11px; color: #7f8c8d; font-style: italic; line-height: 1.4; }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <h2>AI Image Analyzer</h2>
+        <input type="file" id="imageInput" accept="image/jpeg, image/png" onchange="showPreview()">
+        <img id="preview" src="">
+        <button id="uploadBtn" onclick="uploadToCloud()">Start AI Analysis</button>
+        
+        <div class="results-box" id="output">
+            <span id="status">Ready for upload...</span>
+            <div class="stat-line" id="labelResult">Labels: --</div>
+            <div class="stat-line" id="techStats">AI Metrics: --</div>
+        </div>
+    </div>
+
+    <script>
+        // Replace with your actual API Gateway Invoke URL
+        const API_BASE = "https://gvc7co3ei0.execute-api.us-east-1.amazonaws.com";
+
+        function showPreview() {
+            const file = document.getElementById('imageInput').files[0];
+            const preview = document.getElementById('preview');
+            if (file) {
+                preview.src = URL.createObjectURL(file);
+                preview.style.display = 'block';
+                document.getElementById('status').innerText = "Image selected.";
+            }
+        }
+
+        async function uploadToCloud() {
+            const fileInput = document.getElementById('imageInput');
+            const file = fileInput.files[0];
+            const btn = document.getElementById('uploadBtn');
+            const status = document.getElementById('status');
+            
+            if (!file) return alert("Please select an image first!");
+
+            btn.disabled = true;
+            status.innerText = "Step 1: Fetching Secure URL...";
+
+            try {
+                // 1. Get Pre-signed URL from Lambda
+                const urlRes = await fetch(`${API_BASE}/get-url`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fileName: file.name })
+                });
+                const { uploadURL } = await urlRes.json();
+
+                status.innerText = "Step 2: Uploading to S3...";
+                // 2. Direct-to-S3 Upload
+                const s3Res = await fetch(uploadURL, { 
+                    method: 'PUT', 
+                    headers: { 'Content-Type': file.type },
+                    body: file 
+                });
+
+                if (!s3Res.ok) throw new Error("S3 Upload Failed. Check CORS.");
+
+                status.innerText = "Step 3: AI Processing (Wait 5s)...";
+                // 3. Poll DynamoDB for Results
+                setTimeout(() => fetchResults(file.name), 5000);
+
+            } catch (err) {
+                console.error(err);
+                status.innerText = "Error: " + err.message;
+                btn.disabled = false;
+            }
+        }
+
+        async function fetchResults(fileName) {
+            const status = document.getElementById('status');
+            const output = document.getElementById('output');
+            
+            try {
+                const res = await fetch(`${API_BASE}/get-results?imageId=${fileName}`);
+                const data = await res.json();
+
+                // If Lambda hasn't finished writing to DB, Labels will be missing
+                if (!data.Labels) throw new Error("Still processing...");
+
+                status.innerText = "✅ Analysis Complete!";
+                
+                // Format the AI Quality Stats
+                const brightness = Math.round(parseFloat(data.Brightness || 0));
+                const sharpness = Math.round(parseFloat(data.Sharpness || 0));
+
+                // Update UI
+                document.getElementById('labelResult').innerText = "Labels: " + data.Labels.join(", ");
+                document.getElementById('techStats').innerText = `Brightness: ${brightness}% | Sharpness: ${sharpness}%`;
+                
+                // Add Permanent Record Disclaimer if it doesn't exist
+                if(!document.getElementById('db-disclaimer')) {
+                    const disclaimer = document.createElement('div');
+                    disclaimer.id = 'db-disclaimer';
+                    disclaimer.className = 'disclaimer';
+                    disclaimer.innerText = "Note: These statistics and labels are permanently stored in the ImageReports DynamoDB table for future auditing.";
+                    output.appendChild(disclaimer);
+                }
+
+                document.getElementById('uploadBtn').disabled = false;
+
+            } catch (err) {
+                status.innerText = "AI Processing... Retrying in 3s";
+                setTimeout(() => fetchResults(fileName), 3000);
+            }
+        }
+    </script>
+</body>
+</html>
+
+
